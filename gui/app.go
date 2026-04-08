@@ -230,15 +230,12 @@ func (a *App) setupUI() {
 	previewLabel := widget.NewLabel("PREVIEW")
 	previewLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	previewBtn := widget.NewButton("Load Image", a.onSelectPreview)
-
 	a.previewImage = canvas.NewImageFromImage(nil)
 	a.previewImage.FillMode = canvas.ImageFillContain
 	a.previewImage.SetMinSize(fyne.NewSize(350, 300))
 
 	previewPanel := container.NewVBox(
 		previewLabel,
-		previewBtn,
 		a.previewImage,
 	)
 
@@ -260,8 +257,9 @@ func (a *App) setupUI() {
 	a.queueList = widget.NewList(
 		func() int { return len(a.queueItems) },
 		func() fyne.CanvasObject {
-			card := widget.NewCard("", "", nil)
-			return card
+			label := widget.NewLabel("")
+			label.Wrapping = fyne.TextWrapWord
+			return label
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id < len(a.queueItems) {
@@ -269,26 +267,24 @@ func (a *App) setupUI() {
 				status := ""
 				switch item.Status {
 				case "downloading":
-					status = "Downloading..."
+					status = " [DL]"
 				case "processing":
-					status = "Processing..."
+					status = " [PROC]"
 				case "done":
-					status = "Done: " + item.FileName
+					status = " [OK]"
 				case "error":
-					status = "Error: " + item.Error
+					status = " [ERR]"
 				default:
-					status = "Pending"
+					status = " [---]"
 				}
-				card := obj.(*widget.Card)
 				displayName := filepath.Base(item.URL)
 				if displayName == "." || displayName == "" {
 					displayName = item.URL
-					if len(displayName) > 40 {
-						displayName = "..." + displayName[len(displayName)-40:]
+					if len(displayName) > 50 {
+						displayName = "..." + displayName[len(displayName)-50:]
 					}
 				}
-				card.Title = displayName
-				card.SetSubTitle(status)
+				obj.(*widget.Label).SetText(displayName + status)
 			}
 		},
 	)
@@ -310,7 +306,7 @@ func (a *App) setupUI() {
 		}
 	}
 
-	queueLabel := widget.NewLabel("QUEUE (click to preview | deselect to remove)")
+	queueLabel := widget.NewLabel("QUEUE")
 	queueLabel.TextStyle = fyne.TextStyle{Bold: true}
 
 	a.progressBar = widget.NewProgressBar()
@@ -833,7 +829,7 @@ func (a *App) processQueue() {
 			folder = filepath.Join(os.Getenv("USERPROFILE"), "Pictures")
 		}
 		os.MkdirAll(folder, 0755)
-		exec.Command("explorer", "/select,", folder).Start()
+		exec.Command("explorer", folder).Start()
 
 		dialog.ShowInformation("Done!", fmt.Sprintf("Processed %d image(s).\nOutput: %s", completed, folder), a.window)
 	})
@@ -895,7 +891,7 @@ func (a *App) onOpenFolder() {
 		folder = filepath.Join(os.Getenv("USERPROFILE"), "Pictures")
 	}
 	os.MkdirAll(folder, 0755)
-	exec.Command("explorer", "/select,", folder).Start()
+	exec.Command("explorer", folder).Start()
 }
 
 func (a *App) onShowImage() {
