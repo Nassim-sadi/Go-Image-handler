@@ -1,0 +1,13 @@
+# Binary
+*.exe
+imagehandler.exe
+
+# Go
+/vendor/
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
