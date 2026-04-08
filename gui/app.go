@@ -174,8 +174,12 @@ func (a *App) setupUI() {
 	a.formatSelect.SetSelected("webp")
 
 	qualityLabel := widget.NewLabel("Quality:")
+	qualityValueLabel := widget.NewLabel("85%")
 	a.qualitySlider = widget.NewSlider(1, 100)
 	a.qualitySlider.SetValue(85)
+	a.qualitySlider.OnChanged = func(val float64) {
+		qualityValueLabel.SetText(fmt.Sprintf("%.0f%%", val))
+	}
 
 	modeLabel := widget.NewLabel("Mode:")
 	a.modeSelect = widget.NewSelect([]string{"fit", "exact", "cover"}, func(s string) {})
@@ -193,19 +197,31 @@ func (a *App) setupUI() {
 	outputRow := container.NewBorder(nil, nil, outputLabel, browseBtn, a.outputEntry)
 
 	satLabel := widget.NewLabel("Saturation:")
+	satValueLabel := widget.NewLabel("0%")
 	a.saturationSlider = widget.NewSlider(-100, 100)
 	a.saturationSlider.SetValue(0)
-	a.saturationSlider.OnChanged = func(float64) { a.updatePreview() }
+	a.saturationSlider.OnChanged = func(val float64) {
+		satValueLabel.SetText(fmt.Sprintf("%.0f%%", val))
+		a.updatePreview()
+	}
 
 	brightLabel := widget.NewLabel("Brightness:")
+	brightValueLabel := widget.NewLabel("0%")
 	a.brightnessSlider = widget.NewSlider(-100, 100)
 	a.brightnessSlider.SetValue(0)
-	a.brightnessSlider.OnChanged = func(float64) { a.updatePreview() }
+	a.brightnessSlider.OnChanged = func(val float64) {
+		brightValueLabel.SetText(fmt.Sprintf("%.0f%%", val))
+		a.updatePreview()
+	}
 
 	contrastLabel := widget.NewLabel("Contrast:")
+	contrastValueLabel := widget.NewLabel("0%")
 	a.contrastSlider = widget.NewSlider(-100, 100)
 	a.contrastSlider.SetValue(0)
-	a.contrastSlider.OnChanged = func(float64) { a.updatePreview() }
+	a.contrastSlider.OnChanged = func(val float64) {
+		contrastValueLabel.SetText(fmt.Sprintf("%.0f%%", val))
+		a.updatePreview()
+	}
 
 	resetColorBtn := widget.NewButton("Reset Color", a.onResetColor)
 
@@ -214,14 +230,14 @@ func (a *App) setupUI() {
 		a.presetNameEntry,
 		container.NewGridWithColumns(2, widthLabel, a.widthEntry, heightLabel, a.heightEntry),
 		container.NewGridWithColumns(2, formatLabel, a.formatSelect),
-		container.NewGridWithColumns(2, qualityLabel, a.qualitySlider),
+		container.NewGridWithColumns(3, qualityLabel, a.qualitySlider, qualityValueLabel),
 		container.NewGridWithColumns(2, modeLabel, a.modeSelect),
 		outputRow,
 		container.NewHBox(savePresetBtn, newPresetBtn, deletePresetBtn),
 		widget.NewSeparator(),
-		satLabel, a.saturationSlider,
-		brightLabel, a.brightnessSlider,
-		contrastLabel, a.contrastSlider,
+		container.NewGridWithColumns(3, satLabel, a.saturationSlider, satValueLabel),
+		container.NewGridWithColumns(3, brightLabel, a.brightnessSlider, brightValueLabel),
+		container.NewGridWithColumns(3, contrastLabel, a.contrastSlider, contrastValueLabel),
 		resetColorBtn,
 		widget.NewSeparator(),
 		container.NewScroll(a.presetsList),
