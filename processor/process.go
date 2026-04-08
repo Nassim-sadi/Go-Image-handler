@@ -7,8 +7,12 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"image/png"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/chai2010/webp"
@@ -16,10 +20,72 @@ import (
 	"imagehandler/models"
 )
 
-type ImageProcessor struct{}
+type ImageProcessor struct {
+	useCWebP bool
+}
 
 func NewImageProcessor() *ImageProcessor {
-	return &ImageProcessor{}
+	return &ImageProcessor{
+		useCWebP: checkCWebP(),
+	}
+}
+
+func checkCWebP() bool {
+	cmd := exec.Command("cwebp", "-version")
+	if err := cmd.Run(); err == nil {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("where", "cwebp")
+		if err := cmd.Run(); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ImageProcessor) ensureCWebP() error {
+	if p.useCWebP {
+		return nil
+	}
+
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("cwebp not available for this OS")
+	}
+
+	cwebpPath := filepath.Join(os.TempDir(), "imagehandler_cwebp.exe")
+	if _, err := os.Stat(cwebpPath); err == nil {
+		os.Setenv("PATH", filepath.Dir(cwebpPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
+		p.useCWebP = true
+		return nil
+	}
+
+	url := "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/cwebp-windows-x64-1.3.2.zip"
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download cwebp: %w", err)
+	}
+	defer resp.Body.Close()
+
+	zipFile := filepath.Join(os.TempDir(), "cwebp.zip")
+	out, err := os.Create(zipFile)
+	if err != nil {
+		return err
+	}
+	io.Copy(out, resp.Body)
+	out.Close()
+
+	cmd := exec.Command("tar", "-xf", zipFile, "-C", os.TempDir())
+	cmd.Run()
+	os.Remove(zipFile)
+
+	dllPath := filepath.Join(os.TempDir(), "cwebp-windows-x64-1.3.2", "bin", "cwebp.exe")
+	if _, err := os.Stat(dllPath); err == nil {
+		os.Rename(dllPath, cwebpPath)
+		os.Setenv("PATH", filepath.Dir(cwebpPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
+		p.useCWebP = true
+	}
+	return nil
 }
 
 func (p *ImageProcessor) ProcessImage(inputPath string, preset *models.Preset, outputDir string) (string, error) {
@@ -286,12 +352,6 @@ func (p *ImageProcessor) resize(srcImg image.Image, srcW, srcH int, preset *mode
 }
 
 func (p *ImageProcessor) saveWebP(img image.Image, path string, quality int) error {
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
 	bounds := img.Bounds()
 	var rgba *image.RGBA
 	if nrgba, ok := img.(*image.RGBA); ok {
@@ -300,6 +360,20 @@ func (p *ImageProcessor) saveWebP(img image.Image, path string, quality int) err
 		rgba = image.NewRGBA(bounds)
 		draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
 	}
+
+	if !p.useCWebP {
+		p.ensureCWebP()
+	}
+
+	if p.useCWebP {
+		return p.saveWebPCWebP(rgba, path, quality)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
 
 	options := &webp.Options{
 		Quality: float32(quality),
@@ -310,6 +384,36 @@ func (p *ImageProcessor) saveWebP(img image.Image, path string, quality int) err
 	}
 
 	return webp.Encode(file, rgba, options)
+}
+
+func (p *ImageProcessor) saveWebPCWebP(img *image.RGBA, outputPath string, quality int) error {
+	tmpFile, err := os.CreateTemp("", "webp_*.png")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+
+	if err := png.Encode(tmpFile, img); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	var cwebpArgs []string
+	if quality >= 95 {
+		cwebpArgs = []string{tmpPath, "-lossless", "-o", outputPath}
+	} else {
+		cwebpArgs = []string{tmpPath, "-q", fmt.Sprintf("%d", quality), "-o", outputPath}
+	}
+
+	cmd := exec.Command("cwebp", cwebpArgs...)
+	if err := cmd.Run(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("cwebp failed: %w", err)
+	}
+
+	os.Remove(tmpPath)
+	return nil
 }
 
 func (p *ImageProcessor) saveJPEG(img image.Image, path string, quality int) error {
