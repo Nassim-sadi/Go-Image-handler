@@ -316,7 +316,6 @@ func (a *App) setupUI() {
 	a.cancelButton.Hide()
 
 	processBtn := widget.NewButton("Process All", a.onProcessAll)
-	openFolderBtn := widget.NewButton("Open Folder", a.onOpenFolder)
 	showImageBtn := widget.NewButton("Show Image", a.onShowImage)
 
 	a.outputLabel = widget.NewLabel("Output: -")
@@ -330,7 +329,7 @@ func (a *App) setupUI() {
 		inputRow,
 		queueLabel,
 		queueScroll,
-		container.NewHBox(clearBtn, openFolderBtn, showImageBtn),
+		container.NewHBox(clearBtn, showImageBtn),
 		a.progressBar,
 		container.NewHBox(processBtn, a.cancelButton),
 		a.outputLabel,
@@ -825,12 +824,6 @@ func (a *App) processQueue() {
 		a.outputLabel.SetText("Output: " + a.currentProject.OutputPath)
 
 		folder := a.currentProject.OutputPath
-		if folder == "" {
-			folder = filepath.Join(os.Getenv("USERPROFILE"), "Pictures")
-		}
-		os.MkdirAll(folder, 0755)
-		exec.Command("explorer", folder).Start()
-
 		dialog.ShowInformation("Done!", fmt.Sprintf("Processed %d image(s).\nOutput: %s", completed, folder), a.window)
 	})
 }
@@ -879,19 +872,6 @@ func (a *App) processItem(item *models.QueueItem) {
 
 	item.Status = "done"
 	item.FileName = filepath.Base(outputPath)
-}
-
-func (a *App) onOpenFolder() {
-	if a.currentProject == nil {
-		a.statusLabel.Text = "No project selected"
-		return
-	}
-	folder := a.currentProject.OutputPath
-	if folder == "" {
-		folder = filepath.Join(os.Getenv("USERPROFILE"), "Pictures")
-	}
-	os.MkdirAll(folder, 0755)
-	exec.Command("explorer", folder).Start()
 }
 
 func (a *App) onShowImage() {
