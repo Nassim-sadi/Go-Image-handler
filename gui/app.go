@@ -56,7 +56,6 @@ type App struct {
 
 	queueItems []*models.QueueItem
 	queueMutex sync.Mutex
-	seenURLs   map[string]bool
 
 	downloader     *processor.Downloader
 	imageProcessor *processor.ImageProcessor
@@ -67,9 +66,10 @@ type App struct {
 	cancelChan   chan struct{}
 	processing   bool
 
-	previewImage *canvas.Image
-	outputLabel  *widget.Label
-	previewMutex sync.RWMutex
+	previewImage       *canvas.Image
+	previewMutex       sync.RWMutex
+	outputLabel        *widget.Label
+	currentPreviewPath string
 }
 
 const (
@@ -86,7 +86,6 @@ func (a *App) Run() {
 
 	a.downloader = processor.NewDownloader(5)
 	a.imageProcessor = processor.NewImageProcessor()
-	a.seenURLs = make(map[string]bool)
 
 	if err := config.Load(); err != nil {
 		fmt.Printf("Failed to load config: %v\n", err)
@@ -231,11 +230,17 @@ func (a *App) setupUI() {
 	previewLabel := widget.NewLabel("PREVIEW")
 	previewLabel.TextStyle = fyne.TextStyle{Bold: true}
 
+	previewBtn := widget.NewButton("Load Image", a.onSelectPreview)
+
 	a.previewImage = canvas.NewImageFromImage(nil)
 	a.previewImage.FillMode = canvas.ImageFillContain
-	a.previewImage.SetMinSize(fyne.NewSize(300, 200))
+	a.previewImage.SetMinSize(fyne.NewSize(350, 300))
 
-	previewCard := container.NewBorder(previewLabel, nil, nil, nil, a.previewImage)
+	previewPanel := container.NewVBox(
+		previewLabel,
+		previewBtn,
+		a.previewImage,
+	)
 
 	urlLabel := widget.NewLabel("INPUT")
 	urlLabel.TextStyle = fyne.TextStyle{Bold: true}
@@ -337,7 +342,7 @@ func (a *App) setupUI() {
 
 	leftPanel := container.NewVBox(projectsPanel)
 	centerPanel := container.NewVBox(presetPanel)
-	rightPanel := container.NewVBox(previewCard, queuePanel)
+	rightPanel := container.NewVBox(previewPanel, queuePanel)
 
 	mainContainer := container.NewHSplit(
 		container.NewHSplit(leftPanel, centerPanel),
@@ -556,12 +561,6 @@ func (a *App) onAddUrls() {
 
 	count := 0
 	for _, url := range lines {
-		hash := hashURL(url)
-		if a.seenURLs[hash] {
-			continue
-		}
-		a.seenURLs[hash] = true
-
 		item := models.NewQueueItem(url, "", "")
 		if a.currentProject != nil {
 			item.ProjectID = a.currentProject.ID
@@ -646,12 +645,6 @@ func (a *App) onAddFiles() {
 }
 
 func (a *App) addFileToQueue(filePath string) {
-	hash := hashURL(filePath)
-	if a.seenURLs[hash] {
-		return
-	}
-	a.seenURLs[hash] = true
-
 	item := models.NewQueueItem(filePath, "", "")
 	item.FileName = filepath.Base(filePath)
 	if a.currentProject != nil {
@@ -660,16 +653,12 @@ func (a *App) addFileToQueue(filePath string) {
 	if a.currentPreset != nil {
 		item.PresetID = a.currentPreset.ID
 	}
+	a.queueMutex.Lock()
 	a.queueItems = append(a.queueItems, item)
+	a.queueMutex.Unlock()
 }
 
 func (a *App) addURLToQueue(url string) {
-	hash := hashURL(url)
-	if a.seenURLs[hash] {
-		return
-	}
-	a.seenURLs[hash] = true
-
 	item := models.NewQueueItem(url, "", "")
 	if a.currentProject != nil {
 		item.ProjectID = a.currentProject.ID
@@ -680,7 +669,6 @@ func (a *App) addURLToQueue(url string) {
 	a.queueMutex.Lock()
 	a.queueItems = append(a.queueItems, item)
 	a.queueMutex.Unlock()
-	a.updateQueueDisplay()
 }
 
 func (a *App) parseURLs(text string) []string {
@@ -707,9 +695,6 @@ func (a *App) onClearQueue() {
 	a.queueMutex.Lock()
 	a.queueItems = a.queueItems[:0]
 	a.queueMutex.Unlock()
-	for k := range a.seenURLs {
-		delete(a.seenURLs, k)
-	}
 	if a.queueList != nil {
 		a.queueList.Refresh()
 	}
@@ -743,12 +728,39 @@ func (a *App) onProcessAll() {
 		return
 	}
 
+	a.syncPresetFromUI()
+
 	a.processing = true
 	a.cancelChan = make(chan struct{})
 	a.progressBar.Show()
 	a.progressBar.SetValue(0)
 	a.cancelButton.Show()
 	a.processQueue()
+}
+
+func (a *App) syncPresetFromUI() {
+	if a.currentPreset == nil {
+		return
+	}
+
+	var width, height int
+	fmt.Sscanf(a.widthEntry.Text, "%d", &width)
+	fmt.Sscanf(a.heightEntry.Text, "%d", &height)
+
+	presetName := a.presetNameEntry.Text
+	if presetName == "" {
+		presetName = fmt.Sprintf("Preset_%dx%d", width, height)
+	}
+
+	a.currentPreset.Name = presetName
+	a.currentPreset.Width = width
+	a.currentPreset.Height = height
+	a.currentPreset.Format = a.formatSelect.Selected
+	a.currentPreset.Quality = int(a.qualitySlider.Value)
+	a.currentPreset.Mode = a.modeSelect.Selected
+	a.currentPreset.Saturation = a.saturationSlider.Value
+	a.currentPreset.Brightness = a.brightnessSlider.Value
+	a.currentPreset.Contrast = a.contrastSlider.Value
 }
 
 func (a *App) processQueue() {
@@ -815,8 +827,15 @@ func (a *App) processQueue() {
 		a.queueList.Refresh()
 		a.statusLabel.Text = fmt.Sprintf("Completed %d images", completed)
 		a.outputLabel.SetText("Output: " + a.currentProject.OutputPath)
-		exec.Command("explorer", a.currentProject.OutputPath).Start()
-		dialog.ShowInformation("Done!", fmt.Sprintf("Processed %d image(s).\nOutput: %s\n\nFolder opened.", completed, a.currentProject.OutputPath), a.window)
+
+		folder := a.currentProject.OutputPath
+		if folder == "" {
+			folder = filepath.Join(os.Getenv("USERPROFILE"), "Pictures")
+		}
+		os.MkdirAll(folder, 0755)
+		exec.Command("explorer", "/select,", folder).Start()
+
+		dialog.ShowInformation("Done!", fmt.Sprintf("Processed %d image(s).\nOutput: %s", completed, folder), a.window)
 	})
 }
 
@@ -873,10 +892,10 @@ func (a *App) onOpenFolder() {
 	}
 	folder := a.currentProject.OutputPath
 	if folder == "" {
-		folder = os.TempDir()
+		folder = filepath.Join(os.Getenv("USERPROFILE"), "Pictures")
 	}
 	os.MkdirAll(folder, 0755)
-	exec.Command("explorer", folder).Start()
+	exec.Command("explorer", "/select,", folder).Start()
 }
 
 func (a *App) onShowImage() {
@@ -990,6 +1009,72 @@ func (a *App) updatePreviewForItem(item *models.QueueItem) {
 			a.previewImage.Image = preview
 			a.previewMutex.Unlock()
 			a.previewImage.Refresh()
+		})
+	}()
+}
+
+func (a *App) onSelectPreview() {
+	fdialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil || reader == nil {
+			return
+		}
+		defer reader.Close()
+
+		uri := reader.URI()
+		if uri == nil {
+			return
+		}
+
+		inputPath := uri.Path()
+		stat, err := os.Stat(inputPath)
+		if err != nil || stat.IsDir() {
+			return
+		}
+
+		ext := strings.ToLower(filepath.Ext(inputPath))
+		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".gif" && ext != ".bmp" && ext != ".webp" {
+			dialog.ShowError(fmt.Errorf("unsupported format: %s", ext), a.window)
+			return
+		}
+
+		a.previewMutex.Lock()
+		a.currentPreviewPath = inputPath
+		a.previewMutex.Unlock()
+
+		a.loadPreviewImage(inputPath)
+	}, a.window)
+	fdialog.Show()
+}
+
+func (a *App) loadPreviewImage(inputPath string) {
+	if a.currentPreset == nil {
+		a.currentPreset = &models.Preset{
+			Width:      800,
+			Height:     600,
+			Format:     "webp",
+			Quality:    85,
+			Mode:       "fit",
+			Saturation: a.saturationSlider.Value,
+			Brightness: a.brightnessSlider.Value,
+			Contrast:   a.contrastSlider.Value,
+		}
+	}
+
+	go func() {
+		preview, err := a.imageProcessor.PreviewImage(inputPath, a.currentPreset, 500)
+		if err != nil {
+			fyne.Do(func() {
+				a.statusLabel.Text = "Preview error: " + err.Error()
+			})
+			return
+		}
+
+		fyne.Do(func() {
+			a.previewMutex.Lock()
+			a.previewImage.Image = preview
+			a.previewMutex.Unlock()
+			a.previewImage.Refresh()
+			a.statusLabel.Text = "Preview loaded: " + filepath.Base(inputPath)
 		})
 	}()
 }
