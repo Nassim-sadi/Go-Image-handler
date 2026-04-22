@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
+	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -25,6 +27,46 @@ import (
 	"imagehandler/models"
 	"imagehandler/processor"
 )
+
+const (
+	OFN_ALLOWMULTISELECT uint32 = 0x00000200
+	OFN_EXPLORER              = 0x00080000
+	OFN_FILEMUSTEXIST         = 0x00001000
+	OFN_PATHMUSTEXIST        = 0x00000800
+)
+
+type OPENFILENAMEW struct {
+	lStructSize       uint32
+	hwndOwner         syscall.Handle
+	hInstance         syscall.Handle
+	lpstrFilter       *uint16
+	lpstrCustomFilter *uint16
+	nMaxCustFilter    uint32
+	nFilterIndex      uint32
+	lpstrFile         *uint16
+	nMaxFile          uint32
+	lpstrFileTitle    *uint16
+	nMaxFileTitle    uint32
+	lpstrInitialDir   *uint16
+	lpstrTitle        *uint16
+	Flags             uint32
+	nFileOffset       uint16
+	nFileExtension    uint16
+	lpstrDefExt       *uint16
+	lCustData        uintptr
+	lpfnHook         uintptr
+	lpTemplateName   *uint16
+	pvReserved      uintptr
+	dwReserved      uint32
+	FlagsEx         uint32
+}
+
+func GetOpenFileName(ofn *OPENFILENAMEW) int32 {
+	ret, _, _ := comdlg32GetOpenFileName.Call(uintptr(unsafe.Pointer(ofn)))
+	return int32(ret)
+}
+
+var comdlg32GetOpenFileName = syscall.NewLazyDLL("comdlg32.dll").NewProc("GetOpenFileNameW")
 
 type App struct {
 	fyneApp fyne.App
@@ -612,47 +654,73 @@ func (a *App) onPaste() {
 }
 
 func (a *App) onAddFiles() {
-	fdialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-		if err != nil || reader == nil {
-			return
+	files := showNativeFileDialog()
+	count := 0
+	a.queueMutex.Lock()
+	for _, path := range files {
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp" || ext == ".webp" || ext == ".tiff" || ext == ".tif" {
+			a.addFileToQueue(path)
+			count++
 		}
-		defer reader.Close()
+	}
+	a.queueMutex.Unlock()
+	if count > 0 {
+		a.updateQueueDisplay()
+		a.statusLabel.Text = fmt.Sprintf("Added %d file(s)", count)
+	}
+}
 
-		uri := reader.URI()
-		if uri == nil {
-			return
+func showNativeFileDialog() []string {
+	imgExts := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+	filter := "Image Files ("
+	for i, ext := range imgExts {
+		if i > 0 {
+			filter += ";"
 		}
-
-		uriStr := uri.Path()
-		stat, err := os.Stat(uriStr)
-		if err != nil {
-			return
+		filter += "*" + ext
+	}
+	filter += ")|"
+	for i, ext := range imgExts {
+		if i > 0 {
+			filter += ";"
 		}
+		filter += "*" + ext
+	}
+	filter += "|All Files (*.*)|*.*"
 
-		if stat.IsDir() {
-			files, _ := os.ReadDir(uriStr)
-			a.queueMutex.Lock()
-			count := 0
-			for _, f := range files {
-				if f.IsDir() {
-					continue
-				}
-				ext := strings.ToLower(filepath.Ext(f.Name()))
-				if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp" || ext == ".webp" || ext == ".tiff" || ext == ".tif" {
-					filePath := filepath.Join(uriStr, f.Name())
-					a.addFileToQueue(filePath)
-					count++
-				}
+	ofn := &OPENFILENAMEW{
+		lStructSize: uint32(unsafe.Sizeof(OPENFILENAMEW{})),
+		lpstrFilter: syscall.StringToUTF16Ptr(filter),
+		Flags: OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+	}
+
+	var buf [260 * 2]uint16
+	ofn.lpstrFile = &buf[0]
+	ofn.nMaxFile = 260 * 2
+
+	if GetOpenFileName(ofn) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0)
+	path := syscall.UTF16ToString(buf[:])
+	if strings.Contains(path, "\x00\x00") || path == "" {
+		dir := filepath.Dir(path)
+		for i := 0; i < len(buf)/2; i++ {
+			if buf[i] == 0 {
+				break
 			}
-			a.queueMutex.Unlock()
-			a.updateQueueDisplay()
-			a.statusLabel.Text = fmt.Sprintf("Added %d files to queue", count)
-		} else {
-			a.addFileToQueue(uriStr)
-			a.updateQueueDisplay()
+			name := syscall.UTF16ToString(buf[i:])
+			if name != "" && name != path {
+				result = append(result, filepath.Join(dir, name))
+			}
 		}
-	}, a.window)
-	fdialog.Show()
+	} else {
+		result = append(result, path)
+	}
+
+	return result
 }
 
 func (a *App) addFileToQueue(filePath string) {
